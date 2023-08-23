@@ -1,25 +1,3 @@
-def set_up():
-    
-    #     pip reccomandation: if something get wrong check out the compatibilities beetween libraries
-
-    #     Install:
-    #     from sklearn.experimental import enable_iterative_imputer
-    #     from sklearn.impute import IterativeImputer
-    #     from sklearn.linear_model import LinearRegression
-    #     from sklearn.linear_model import BayesianRidge
-    #     from sklearn.impute import KNNImputer
-
-    #     # Miceforest (MICE)
-    #     import miceforest as mf
-    #     from miceforest import ImputationKernel
-    #     from sklearn.metrics import mean_squared_error
-
-    #     # General using
-    #     from sklearn.metrics import mean_squared_error
-    #     from sklearn.model_selection import train_test_split
-    return
-
-
 def sum_up_count_values_df(df):
     '''
     Sum up:
@@ -32,21 +10,23 @@ def sum_up_count_values_df(df):
     print(f'Total values (numeric): {df.select_dtypes(include=[np.number]).isna().sum().sum()}')
     return
 
-def iterative_imputation_knn(df, test_column = 'HICP(%)'):
+def iterative_imputation_knn(df, test_column = 'HICP(%)', grouping_col = 'geo', size_test=0.2):
+    
+    # Suggestion to use train test: with enough quantity of data
+    
+    '''
+    KNN made by each distinct values of 'geo' column
+    '''
+    
     col_to_test = test_column
+    
     true_values_list = []
     imputed_values_list = []
     
-    '''
-    KNN used
-    Made by each subgroup by 'geo' column
-    '''
-
-    groups = df.groupby('geo', group_keys=False)
-
+    groups = df.groupby(grouping_col, group_keys=False)
 
     def impute_group(group):
-        train, test = train_test_split(group.dropna(subset=[col_to_test]), test_size=0.2, random_state=42)
+        train, test = train_test_split(group.dropna(subset=[col_to_test]), test_size=size_test, random_state=42)
         test_copy = test.copy()
         missing_rows = test_copy.sample(frac=0.1).index
         true_values = test_copy.loc[missing_rows, col_to_test]
@@ -82,8 +62,7 @@ def iterative_imputation_knn(df, test_column = 'HICP(%)'):
 
     return imputed_df, comparison_df, rmse
 
-
-def iterative_imputation_sklearn(df, estimator_choice='BayesianRidge', col_to_test = 'HICP(%)', geo_col = 'geo'):
+def iterative_imputation_sklearn(df, estimator_choice='BayesianRidge', col_to_test = 'HICP(%)', grouping_col = 'geo'):
     
     '''
     Impute missing values using iterative imputer.
@@ -95,7 +74,8 @@ def iterative_imputation_sklearn(df, estimator_choice='BayesianRidge', col_to_te
     Returns:
     imputed_df, comparison_df, rmse
     '''
-     # Check estimator choice
+    
+    # Check estimator choice
     if estimator_choice not in ['BayesianRidge', 'LinearRegression']:
         raise ValueError("estimator_choice must be either 'BayesianRidge' or 'LinearRegression'")
 
@@ -106,7 +86,7 @@ def iterative_imputation_sklearn(df, estimator_choice='BayesianRidge', col_to_te
     categorical_values_list = []
 
     # Group by 'geo' column
-    groups = df.groupby(geo_col)
+    groups = df.groupby(grouping_col)
     
     # Model used
     print('BayesianRidge model')
@@ -118,6 +98,7 @@ def iterative_imputation_sklearn(df, estimator_choice='BayesianRidge', col_to_te
         subset_group.loc[true_values.index, col_to_test] = np.nan
         numerical_columns = subset_group.select_dtypes(include=[np.number]).columns
         
+        # -- model decided to use in udf setting
         if estimator_choice == 'BayesianRidge':
             imp = IterativeImputer(estimator=BayesianRidge(), max_iter=30, random_state=0)
         else:
@@ -126,10 +107,7 @@ def iterative_imputation_sklearn(df, estimator_choice='BayesianRidge', col_to_te
         subset_group[numerical_columns] = imp.fit_transform(subset_group[numerical_columns])
         
         categorical_columns = subset_group.select_dtypes(exclude=[np.number]).columns
-
-        #         # --- 3-KNN
-#         imp = KNNImputer(n_neighbors=2, weights='uniform')
-#         subset_group[numerical_columns] = imp.fit_transform(subset_group[numerical_columns])
+        # --
         
         for idx in true_values.index:
             true_values_list.append(true_values[idx])
@@ -139,13 +117,15 @@ def iterative_imputation_sklearn(df, estimator_choice='BayesianRidge', col_to_te
         return subset_group
 
     imputed_df = groups.apply(impute_group).reset_index(drop=True)
-
+    
+    # -- df comparing values
     comparison_df = pd.DataFrame({
         **pd.DataFrame(categorical_values_list),
         'True Values': true_values_list,
         'Imputed Values': ['{:.1f}'.format(value) for value in imputed_values_list]
     })
-
+    
+    # -- Evaluate model
     rmse = np.sqrt(mean_squared_error(true_values_list, imputed_values_list))
     range_of_data = df[col_to_test].max() - df[col_to_test].min()
     percentage_error = (rmse / range_of_data) * 100
@@ -165,7 +145,8 @@ from sklearn.metrics import r2_score
 def mice_train_test(X, y):
     
     '''
-    # Make sure you columns 'geo', 'country' and 'year' are category
+    # Make sure your 'object' columns are converted to 'category' type
+    (category are more dreadable for ml models)
     
     Steps model:
     1) Imputation MICE for X train (saved in 'X_train_imputed')
@@ -183,32 +164,32 @@ def mice_train_test(X, y):
     Note: make sure you have enough nan value to make MICE interesting to use
     '''
 
-    # Dividiamo i dati in training e test set
+    # Train and test
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
 
-    # Inizializziamo il kernel di miceforest per il training set
+    # Kernel initialization for miceforest training
     kernel_train = mf.ImputationKernel(X_train, save_all_iterations=True, random_state=0)
 
-    # Imputiamo i valori mancanti nel training set
+    # impute the missing values in the training set
     kernel_train.mice(3)
 
-    # Recuperiamo il dataset imputato
+    # recover the imputed dataset
     X_train_imputed = kernel_train.complete_data()
     X_train_df = pd.DataFrame(X_train_imputed)
 
-    # Addestriamo un modello sui dati imputati
+    # Train imputed data
     model = LinearRegression()
     model.fit(X_train_imputed, y_train)
 
-    # Imputiamo i valori mancanti nel test set usando le stesse informazioni dal training set
+    # We input the missing values in the test set using the same information from the training set
     kernel_test = mf.ImputationKernel(X_test, save_all_iterations=True, random_state=0)
     kernel_test.mice(3)
 
-    # Recuperiamo il dataset imputato
+    # recover the imputed dataset
     X_test_imputed = kernel_test.complete_data()
     X_test_df = pd.DataFrame(X_test_imputed)
 
-    # Root Mean Squared Error: calcoliamo l'errore quadratico medio del modello sul test set
+    # Root Mean Squared Error:  calculate the Model Standard Quadratic Error on the test set
     predictions = model.predict(X_test_imputed)
     rmse = np.sqrt(mean_squared_error(y_test, predictions))
     print(f'Root Mean Squared Error: {rmse}')
@@ -218,8 +199,8 @@ def mice_train_test(X, y):
     print(f'R-squared: {r2}')
 
     # R2 Adjusted
-    n = y_test.shape[0] # il numero di osservazioni
-    p = X_test.shape[1] # il numero di predittori
+    n = y_test.shape[0] # the number of observations
+    p = X_test.shape[1] # the number of predictors
 
     r2 = r2_score(y_test, predictions)
     adjusted_r2 = 1 - (1 - r2) * ((n - 1) / (n - p - 1))
@@ -227,10 +208,17 @@ def mice_train_test(X, y):
     
     return rmse, r2, adjusted_r2
 
+
 # test one: made by all data
 def mice_imputation_test(df, col_to_test = 'HICP(%)', cols_to_category=['geo', 'country', 'year']):
+    
+    
     '''
-    **Test Miceforest predictions**
+    --> test one: made using all data for imputation
+     
+    =================
+    
+    Impute need:
     
     Select original dataframe (with nan values)
     
@@ -238,14 +226,24 @@ def mice_imputation_test(df, col_to_test = 'HICP(%)', cols_to_category=['geo', '
     1) Select columns to test. That values will be randomly converted to nan and tested with predictions
     2) All nan values predicted will be compared with real
     
-    Note: Make sure you don't have empty values in columns: 'geo', 'country', 'year' 
+    Note: Make sure you don't have empty values in columns: 'geo', 'country', 'year'
+    
+    =================
+    
+    Output:
+    
+    - kds: imputed data
+    - imputed_df: dataframe imputed
+    - comparison_df: dataframe with true values and imputed values
+    - rmse: Root Mean Squared Error (RMSE) is calculated between the real and imputed values.
+    
     '''
     
     # If columns are not category yet, convert them
     df_mf = df.copy()
     df_mf[cols_to_category] = df_mf[cols_to_category].astype('category')
     
-    # Crea una copia del DataFrame e seleziona una frazione dei dati noti da imputare
+    # Create a copy of the DataFrame and select a fraction of the known data to be imputed
     df_mf = df.dropna(subset=[col_to_test]).copy()
     true_values = df_mf.sample(frac=0.1)[col_to_test]
     df_mf.loc[true_values.index, col_to_test] = np.nan
@@ -264,21 +262,21 @@ def mice_imputation_test(df, col_to_test = 'HICP(%)', cols_to_category=['geo', '
     # kds.mice(iterations=20, n_estimators=10, device='gpu') # verbose=2
 
 
-    # --- Completa i dati imputati
+    # --- Complete the imputed data
     imputed_df = kds.complete_data()
 
-    # Recupera i valori imputati
+    # Recovers the imputed values
     imputed_values = imputed_df.loc[true_values.index, col_to_test]
 
-    # --- Calcola l'RMSE
+    # --- Calculate the RMSE
     rmse = np.sqrt(mean_squared_error(true_values, imputed_values))
 
-    # Calcola l'errore percentuale
+    # Calculate the percentage error
     range_of_data = df[col_to_test].max() - df[col_to_test].min()
     percentage_error = (rmse / range_of_data) * 100
     print(f'RMSE percentage_error (min,max): {percentage_error:.2f}')
 
-    # --- Crea un DataFrame con i valori reali e imputati
+    # --- Create a DataFrame with real and imputed values
     comparison_df = pd.DataFrame({
         'True Values': true_values,
         'Imputed Values': ['{:.1f}'.format(value) for value in imputed_values]
@@ -288,24 +286,23 @@ def mice_imputation_test(df, col_to_test = 'HICP(%)', cols_to_category=['geo', '
 
     return imputed_df, comparison_df, rmse, kds
 
-
-def mice_forest_geo(df, col_to_test='HICP(%)', geo_column='geo', country_column='country'):
+# test two: made by each 'geo'
+def mice_forest_grouped(df, col_to_test='HICP(%)', grouping_column='geo', other_cat_col='country'): # other_cat_column (no year)
     
     '''
+    --> test two: imputation made by each 'geo' distinct value
+     
+    =================
+    
     This function allows to impute the missing data in a dataframe taking into account
     the subgroups formed by the "geo" column, providing an estimate of the accuracy of
     the imputation and returning the imputed data.
     
     Decision has been made because in this way prediction will take into cosnderation countries similarities.
-    
-    
-    Results:
-    - All imputed dataframes are combined into a single dataframe.
-    - The Root Mean Squared Error (RMSE) is calculated between the real and imputed values.
-    - A dataframe is created to compare the real and imputed values.    
+      
     ============
     
-    Required:
+    Imput needs:
     - df: original dataframe
     - col_to_test: column to use fo testing prediction
     - geo_column: geo column in dataframe
@@ -313,36 +310,37 @@ def mice_forest_geo(df, col_to_test='HICP(%)', geo_column='geo', country_column=
     
     ============
     
-    NOTE: mice models used consider also outliers values, because our goal si to identify values that
-    could be consistent with period and country reference. Decision to consider outliers has been done
-    because outliers are not wrong values but correct one and second because if we remove potentially
-    value predicted in same outlier row will be not realistic.
+    Results:
+    - final_df: all imputed dataframes are combined into a single dataframe.
+    - rmse: Root Mean Squared Error (RMSE) is calculated between the real and imputed values.
+    - comparison_df: a dataframe is created to compare the real and imputed values.
+
     '''
     
     df_geo_list = df[geo_column].unique()
     
     # If you have enough data, can also subgrouping by 'year', so it will give as reference the same period (probably more attendible)
 
-    # Lista per contenere i dataframe imputati
+    # List to contain imputed dataframes
     imputed_dfs = []
     true_values_list = []
     imputed_values_list = []
 
     for geo_value in df_geo_list:
-        # Estrai il sottogruppo corrispondente al valore corrente di 'geo'
+        # Extract the subgroup corresponding to the current value of 'geo'
         group = df[df[geo_column] == geo_value].copy()
 
-        # Seleziona una frazione dei dati noti da imputare
+        # Select a fraction of known data to be imputed
         true_values = group.sample(frac=0.1)[col_to_test]
         group.loc[true_values.index, col_to_test] = np.nan
 
-        # Rimuovi le categorie inutilizzate nelle colonne "geo" e "country"
+        # Remove unused categories in "geo" and "country" columns
         group[geo_column] = group[geo_column].cat.remove_unused_categories()
-        group[country_column] = group[country_column].cat.remove_unused_categories()
+        group[other_cat_col] = group[other_cat_col].cat.remove_unused_categories()
         
         # --- MICE
         
-        # Crea il kernel di imputazione
+        # Create the attribution kernel
         kds = ImputationKernel(group, random_state=4)
         
         # Manually application
@@ -350,37 +348,37 @@ def mice_forest_geo(df, col_to_test='HICP(%)', geo_column='geo', country_column=
         # ---
         
         # Tuning parameters
-	# optimal_parameters, losses = kds.tune_parameters(dataset=0, optimization_steps=10)
+        # optimal_parameters, losses = kds.tune_parameters(dataset=0, optimization_steps=10)
         # kds.mice(1, variable_parameters=optimal_parameters)
         # print(optimal_parameters)
         # ---
         
-        # Ottieni il dataframe imputato
+        # Get the imputed dataframe
         df_imputed = kds.complete_data()
         # ---
         
-        # Ripristina le categorie originali se necessario
+        # Restore original categories if necessary
         df_imputed[geo_column] = pd.Categorical(df_imputed[geo_column], categories=df[geo_column].unique())
-        df_imputed[country_column] = pd.Categorical(df_imputed[country_column], categories=df[country_column].unique())
+        df_imputed[other_cat_col] = pd.Categorical(df_imputed[other_cat_col], categories=df[other_cat_col].unique())
 
-        # Aggiungi il dataframe imputato alla lista
+        # Add the imputed dataframe to the list
         imputed_dfs.append(df_imputed)
 
-        # Recupera i valori imputati
+        # Recovers the imputed values
         imputed_values = df_imputed.loc[true_values.index, col_to_test]
 
-        # Estendi le liste dei valori veri e imputati
+        # Extend real and imputed value lists
         true_values_list.extend(true_values)
         imputed_values_list.extend(imputed_values)
 
-    # Combina i dataframe imputati in un unico dataframe
+    # Combine imputed dataframes into a single dataframe
     final_df = pd.concat(imputed_dfs)
 
-    # Calcola l'RMSE
+    # Calculate the RMSE
     rmse = np.sqrt(mean_squared_error(true_values_list, imputed_values_list))
     print(f'RMSE: {rmse:.2f}')
 
-    # Crea un DataFrame con i valori reali e imputati
+    # Create a DataFrame with real and imputed values
     comparison_df = pd.DataFrame({
         'True Values': true_values_list,
         'Imputed Values': imputed_values_list
@@ -390,4 +388,5 @@ def mice_forest_geo(df, col_to_test='HICP(%)', geo_column='geo', country_column=
     display(comparison_df)
     
     return final_df, rmse, comparison_df
+
 
